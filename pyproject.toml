@@ -1,0 +1,22 @@
+[project]
+name = "multi-agent-orchestration"
+version = "0.1.0"
+description = "Researcher → writer → reviewer pipeline with durable handoffs, built on the Resonate Python SDK"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "openai>=1.0.0",
+    "resonate-sdk>=0.6.3",
+]
+
+[project.scripts]
+agent = "src.agent:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
