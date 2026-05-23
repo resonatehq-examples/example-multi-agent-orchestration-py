@@ -24,7 +24,7 @@ from resonate import Context, Resonate
 
 load_dotenv()
 
-resonate = Resonate()
+resonate = Resonate.remote()
 
 
 class OrchestrationResult(TypedDict):
