@@ -3,28 +3,32 @@ Multi-Agent Orchestration with Resonate
 
 An orchestrator coordinates three specialist AI agents in sequence:
 researcher -> writer -> reviewer. Each agent handoff is a durable
-checkpoint via `yield ctx.run(...)`. If any agent fails (API timeout,
+checkpoint via `await ctx.run(...)`. If any agent fails (API timeout,
 crash, rate limit), Resonate retries that step. Completed agents are NOT
 re-run -- their output is cached at the checkpoint.
 
 Human-in-the-loop is a natural extension: replace the simulated approval
-with `yield ctx.promise({...})` and resolve it externally. The workflow
+with `await ctx.promise()` and resolve it externally. The workflow
 blocks until the promise is resolved and survives restarts while waiting.
 """
 
+import asyncio
 import os
 import sys
 import time
-from threading import Event
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from dotenv import load_dotenv
 from openai import OpenAI
-from resonate import Context, Resonate
+from resonate.resonate import Resonate
+
+if TYPE_CHECKING:
+    from resonate.context import Context
 
 load_dotenv()
 
-resonate = Resonate()
+url = os.environ.get("RESONATE_URL", "http://localhost:8001")
+resonate = Resonate(url=url)
 
 
 class OrchestrationResult(TypedDict):
@@ -48,9 +52,9 @@ _agent_attempts: dict[str, int] = {}
 # In a production system this would call search APIs, RAG databases, etc.
 
 
-def researcher(ctx: Context, topic: str) -> str:
+async def researcher(ctx: "Context", topic: str) -> str:
     print(f'[researcher]  Researching: "{topic}"...')
-    client: OpenAI = ctx.get_dependency("openai")
+    client: OpenAI = ctx.get_dependency(OpenAI)
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -80,7 +84,7 @@ def researcher(ctx: Context, topic: str) -> str:
 # Simulates a failure on first attempt in crash demo mode.
 
 
-def writer(ctx: Context, topic: str, research: str, crash_on_first: bool) -> str:
+async def writer(ctx: "Context", topic: str, research: str, crash_on_first: bool) -> str:
     key = f"writer:{topic}"
     _agent_attempts[key] = _agent_attempts.get(key, 0) + 1
     attempt = _agent_attempts[key]
@@ -91,7 +95,7 @@ def writer(ctx: Context, topic: str, research: str, crash_on_first: bool) -> str
         time.sleep(0.2)
         raise RuntimeError("Writer agent connection reset (simulated)")
 
-    client: OpenAI = ctx.get_dependency("openai")
+    client: OpenAI = ctx.get_dependency(OpenAI)
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -126,9 +130,9 @@ def writer(ctx: Context, topic: str, research: str, crash_on_first: bool) -> str
 # Reviews the draft and provides a brief approval decision.
 
 
-def reviewer(ctx: Context, draft: str) -> str:
+async def reviewer(ctx: "Context", draft: str) -> str:
     print("[reviewer]    Reviewing draft...")
-    client: OpenAI = ctx.get_dependency("openai")
+    client: OpenAI = ctx.get_dependency(OpenAI)
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -155,27 +159,26 @@ def reviewer(ctx: Context, draft: str) -> str:
 # Orchestrator Workflow
 # ============================================================================
 # An orchestrator delegates to three specialist agents in sequence.
-# Each `yield ctx.run(...)` is a durable checkpoint -- if any agent fails,
+# Each `await ctx.run(...)` is a durable checkpoint -- if any agent fails,
 # Resonate retries that step only. Completed agents are NOT re-run.
 
 
-@resonate.register
-def orchestrate(ctx: Context, topic: str, crash_on_writer: bool = False):
+async def orchestrate(ctx: "Context", topic: str, crash_on_writer: bool = False):
     # Step 1: Research -- gather findings
-    findings = yield ctx.run(researcher, topic)
+    findings = await ctx.run(researcher, topic)
 
     # Step 2: Write -- produce a draft from findings
     # If crash_on_writer=True, the writer fails on first attempt and retries.
     # The researcher does NOT re-run on retry -- its result is cached.
-    draft = yield ctx.run(writer, topic, findings, crash_on_writer)
+    draft = await ctx.run(writer, topic, findings, crash_on_writer)
 
     # Step 3: Review -- check the draft quality
-    review = yield ctx.run(reviewer, draft)
+    review = await ctx.run(reviewer, draft)
 
     # Step 4: Human approval (simulated in this demo).
     # In production:
-    #   approval = yield ctx.promise(id=f"approval/{topic}")
-    #   approved = yield approval
+    #   approval = await ctx.promise()
+    #   approved = await approval
     # The workflow blocks until the promise is resolved externally and
     # survives restarts while waiting -- the promise IS the checkpoint.
     approved = "APPROVED" in review.upper()
@@ -195,19 +198,20 @@ def orchestrate(ctx: Context, topic: str, crash_on_writer: bool = False):
 # ============================================================================
 
 
-def main() -> None:
+async def main() -> None:
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
         raise SystemExit("OPENAI_API_KEY environment variable is required")
 
-    resonate.set_dependency("openai", OpenAI(api_key=openai_api_key))
+    resonate.with_dependency(OpenAI(api_key=openai_api_key))
+    resonate.register(orchestrate)
 
     # CLI flags for ad-hoc demoing without going through `resonate invoke`.
     crash_mode = "--crash" in sys.argv
     topic = "The future of durable execution in AI applications"
     for arg in sys.argv:
         if arg.startswith("--topic="):
-            topic = arg[len("--topic=") :]
+            topic = arg[len("--topic="):]
 
     print("=== Resonate Multi-Agent Orchestration ===")
     mode = "CRASH (writer agent fails on first attempt)" if crash_mode else "HAPPY PATH"
@@ -215,21 +219,22 @@ def main() -> None:
     print(f'Topic: "{topic}"\n')
     print("Pipeline: researcher -> writer -> reviewer -> [human approval] -> publish\n")
 
-    print("Worker started. Invoke with:")
+    print("[worker]     starting — registered: orchestrate")
+    print("[worker]     waiting for work from the Resonate Server...")
+    print("\nInvoke with:")
     print(
         '   resonate invoke orchestration.1 --func orchestrate '
         f'--arg "{topic}" --arg {str(crash_mode).lower()}'
     )
-    print("\nOr from another script: orchestrate.run(\"orchestration.1\", topic, crash_mode)\n")
-
-    resonate.start()
+    print()
 
     try:
-        Event().wait()
-    except KeyboardInterrupt:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nShutting down...")
-        resonate.stop()
+    finally:
+        await resonate.stop()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
