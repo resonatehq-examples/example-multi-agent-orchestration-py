@@ -24,7 +24,7 @@ If the writer fails mid-generation -- API timeout, crash, rate limit -- Resonate
 ## Prerequisites
 
 - Python 3.12+
-- [Resonate Server](https://github.com/resonatehq/resonate-legacy-server) running locally
+- [Resonate Server](https://github.com/resonatehq/resonate) running locally
 - OpenAI API key
 
 ## Setup
@@ -42,7 +42,7 @@ cp .env.example .env
 ### 1. Start the Resonate server
 
 ```bash
-resonate serve
+resonate dev
 ```
 
 ### 2. Start the worker
@@ -102,9 +102,9 @@ Notice: researcher runs once. Writer retries once. Reviewer runs once. The retry
 
 ## What to observe
 
-1. **Researcher does not re-run on writer failure** -- its result is cached at the `yield ctx.run(...)` checkpoint
+1. **Researcher does not re-run on writer failure** -- its result is cached at the `await ctx.run(...)` checkpoint
 2. **No retry code in the orchestrator** -- `orchestrate` is pure sequential logic
-3. **Each yield is a checkpoint** -- crash the worker after any agent call and restart; it resumes from there
+3. **Each await is a checkpoint** -- crash the worker after any agent call and restart; it resumes from there
 4. **Human approval hook** -- see the comment in `src/agent.py` for how to add `ctx.promise()` blocking
 
 ## The code
@@ -112,17 +112,16 @@ Notice: researcher runs once. Writer retries once. Reviewer runs once. The retry
 The entire orchestrator is a handful of lines in `src/agent.py`:
 
 ```python
-@resonate.register
-def orchestrate(ctx: Context, topic: str, crash_on_writer: bool = False):
-    # Each yield is a durable checkpoint
+async def orchestrate(ctx: Context, topic: str, crash_on_writer: bool = False):
+    # Each await is a durable checkpoint
     # If any agent fails, Resonate retries that step only
-    findings = yield ctx.run(researcher, topic)
-    draft    = yield ctx.run(writer, topic, findings, crash_on_writer)
-    review   = yield ctx.run(reviewer, draft)
+    findings = await ctx.run(researcher, topic)
+    draft    = await ctx.run(writer, topic, findings, crash_on_writer)
+    review   = await ctx.run(reviewer, draft)
 
     # Human-in-the-loop (production pattern):
-    #   approval = yield ctx.promise(id=f"approval/{topic}")
-    #   approved = yield approval
+    #   approval = await ctx.promise()
+    #   approved = await approval
 
     approved = "APPROVED" in review.upper()
     return {
@@ -139,15 +138,20 @@ def orchestrate(ctx: Context, topic: str, crash_on_writer: bool = False):
 The orchestrator has a comment showing how to add real human approval. Replace the simulated approval with:
 
 ```python
-approval = yield ctx.promise(id=f"approval/{topic}")
-print(f"Waiting for approval. Resolve at: POST /promises/approval/{topic}/resolve")
-approved = yield approval
+approval = await ctx.promise()
+approved = await approval
 ```
 
-Then resolve it externally:
+> **Note:** `ctx.promise()` in SDK v0.7.0 takes no `id` parameter — the promise id is opaque and
+> auto-assigned by the server. To resolve the promise externally, retrieve its id from the server's
+> promise-list API (e.g. `GET /promises`) and then resolve it:
 
 ```bash
-curl -X POST http://localhost:8001/promises/approval/my-topic/resolve \
+# 1. Find the promise id
+curl http://localhost:8001/promises
+
+# 2. Resolve it by id
+curl -X POST http://localhost:8001/promises/<promise-id>/resolve \
   -H 'content-type: application/json' \
   -d '{"data": true}'
 ```
@@ -166,13 +170,13 @@ example-multi-agent-orchestration-py/
 └── README.md
 ```
 
-## Why a generator orchestrates three agents
+## Why async/await orchestrates three agents
 
 Sequential agent orchestration is often a hosted problem: a platform provides step-level retries, dashboard observability, and an event-based execution model with routing infrastructure. This example solves the narrower problem -- coordinate three specialist agents in order, survive any single agent failure, without leaving the process.
 
-The orchestrator is a few lines of generator. Each `yield ctx.run(agent, ...)` is a durable checkpoint: a crash or API failure retries only that agent. Researcher output is cached at its checkpoint before writer starts; writer output is cached before reviewer starts. There is no retry configuration, no step metadata, no routing schema -- just sequential `yield ctx.run` calls.
+The orchestrator is a few lines of async/await. Each `await ctx.run(agent, ...)` is a durable checkpoint: a crash or API failure retries only that agent. Researcher output is cached at its checkpoint before writer starts; writer output is cached before reviewer starts. There is no retry configuration, no step metadata, no routing schema -- just sequential `await ctx.run` calls.
 
-Human-in-the-loop extends naturally. `yield ctx.promise(id="approval/topic")` blocks the workflow until the promise is resolved externally. The orchestrator survives restarts while waiting; the approval is the checkpoint. No hosted approval surface required.
+Human-in-the-loop extends naturally. `await ctx.promise()` blocks the workflow until the promise is resolved externally. The orchestrator survives restarts while waiting; the approval is the checkpoint. No hosted approval surface required.
 
 ## Learn more
 
