@@ -92,7 +92,7 @@ async def writer(ctx: "Context", topic: str, research: str, crash_on_first: bool
     print(f"[writer]      Writing article (attempt {attempt})...")
 
     if crash_on_first and attempt == 1:
-        time.sleep(0.2)
+        await asyncio.sleep(0.2)
         raise RuntimeError("Writer agent connection reset (simulated)")
 
     client: OpenAI = ctx.get_dependency(OpenAI)
@@ -198,7 +198,7 @@ async def orchestrate(ctx: "Context", topic: str, crash_on_writer: bool = False)
 # ============================================================================
 
 
-async def main() -> None:
+async def _main() -> None:
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
         raise SystemExit("OPENAI_API_KEY environment variable is required")
@@ -236,5 +236,9 @@ async def main() -> None:
         await resonate.stop()
 
 
+def main() -> None:
+    asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

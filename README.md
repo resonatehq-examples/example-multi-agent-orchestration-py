@@ -139,14 +139,19 @@ The orchestrator has a comment showing how to add real human approval. Replace t
 
 ```python
 approval = await ctx.promise()
-print(f"Waiting for approval. Resolve at: POST /promises/approval/{topic}/resolve")
 approved = await approval
 ```
 
-Then resolve it externally:
+> **Note:** `ctx.promise()` in SDK v0.7.0 takes no `id` parameter — the promise id is opaque and
+> auto-assigned by the server. To resolve the promise externally, retrieve its id from the server's
+> promise-list API (e.g. `GET /promises`) and then resolve it:
 
 ```bash
-curl -X POST http://localhost:8001/promises/approval/my-topic/resolve \
+# 1. Find the promise id
+curl http://localhost:8001/promises
+
+# 2. Resolve it by id
+curl -X POST http://localhost:8001/promises/<promise-id>/resolve \
   -H 'content-type: application/json' \
   -d '{"data": true}'
 ```
