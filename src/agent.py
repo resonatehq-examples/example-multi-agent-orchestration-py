@@ -15,7 +15,6 @@ blocks until the promise is resolved and survives restarts while waiting.
 import asyncio
 import os
 import sys
-import time
 from typing import TYPE_CHECKING, TypedDict
 
 from dotenv import load_dotenv
@@ -199,11 +198,9 @@ async def orchestrate(ctx: "Context", topic: str, crash_on_writer: bool = False)
 
 
 async def _main() -> None:
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise SystemExit("OPENAI_API_KEY environment variable is required")
-
-    resonate.with_dependency(OpenAI(api_key=openai_api_key))
+    # OpenAI() reads OPENAI_API_KEY and OPENAI_BASE_URL from the environment
+    # automatically. OPENAI_BASE_URL can point to a local mock for CI/testing.
+    resonate.with_dependency(OpenAI())
     resonate.register(orchestrate)
 
     # CLI flags for ad-hoc demoing without going through `resonate invoke`.
@@ -219,6 +216,7 @@ async def _main() -> None:
     print(f'Topic: "{topic}"\n')
     print("Pipeline: researcher -> writer -> reviewer -> [human approval] -> publish\n")
 
+    print("Worker started", flush=True)
     print("[worker]     starting — registered: orchestrate")
     print("[worker]     waiting for work from the Resonate Server...")
     print("\nInvoke with:")
